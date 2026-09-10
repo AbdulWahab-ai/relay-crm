@@ -1,0 +1,331 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  admin
+  manager
+  sales_rep
+}
+enum PlanTier {
+  starter
+  pro
+  enterprise
+}
+enum DealStage {
+  lead
+  qualified
+  proposal
+  negotiation
+  won
+  lost
+}
+enum ActivityType {
+  call
+  email
+  meeting
+  note
+  task
+}
+enum ActivityStatus {
+  pending
+  completed
+  cancelled
+}
+enum AIActionType {
+  assistant
+  email_draft
+  summarize
+  lead_score
+}
+
+model User {
+  id            String       @id @default(cuid())
+  name          String
+  email         String       @unique
+  passwordHash  String?
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  memberships   Membership[]
+  accounts      Account[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([provider, providerAccountId])
+}
+
+model Organization {
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  memberships  Membership[]
+  invitations  Invitation[]
+  contacts     Contact[]
+  deals        Deal[]
+  activities   Activity[]
+  subscription Subscription?
+  usageLogs    AIUsageLog[]
+  usageBuckets UsageBucket[]
+  aiRequests   AIRequest[]
+  aiActions    AIAction[]
+  jobs         Job[]
+  auditLogs    AuditLog[]
+}
+
+model Membership {
+  organizationId String
+  userId         String
+  role           Role         @default(sales_rep)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  contacts       Contact[]
+  deals          Deal[]
+  activities     Activity[]
+  usageLogs      AIUsageLog[]
+  aiRequests     AIRequest[]
+  aiActions      AIAction[]
+  @@id([organizationId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  email          String
+  role           Role         @default(sales_rep)
+  tokenHash      String       @unique
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, email])
+}
+
+model Contact {
+  id               String       @id @default(cuid())
+  organizationId   String
+  ownerId          String
+  name             String
+  email            String
+  phone            String?
+  company          String
+  jobTitle         String?
+  tags             String[]     @default([])
+  source           String       @default("manual")
+  notes            String       @default("") @db.Text
+  aiScore          Int?
+  aiExplanation    String?
+  scoredAt         DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner            Membership   @relation(fields: [organizationId, ownerId], references: [organizationId, userId], onDelete: Restrict)
+  deals            Deal[]
+  activities       Activity[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, email])
+  @@index([organizationId, ownerId])
+  @@index([organizationId, company])
+}
+
+model Deal {
+  id               String       @id @default(cuid())
+  organizationId   String
+  ownerId          String
+  contactId        String?
+  title            String
+  stage            DealStage    @default(lead)
+  value            Decimal      @db.Decimal(14, 2)
+  probability      Int          @default(10)
+  closeDate        DateTime?
+  notes            String       @default("") @db.Text
+  aiScore          Int?
+  aiExplanation    String?
+  scoredAt         DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner            Membership   @relation(fields: [organizationId, ownerId], references: [organizationId, userId], onDelete: Restrict)
+  contact          Contact?     @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: NoAction)
+  activities       Activity[]
+  @@unique([organizationId, id])
+  @@index([organizationId, stage, closeDate])
+  @@index([organizationId, ownerId])
+}
+
+model Activity {
+  id             String         @id @default(cuid())
+  organizationId String
+  ownerId        String
+  contactId      String?
+  dealId         String?
+  type           ActivityType   @default(task)
+  status         ActivityStatus @default(pending)
+  title          String
+  body           String         @default("") @db.Text
+  dueDate        DateTime?
+  reminderAt     DateTime?
+  remindedAt     DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner          Membership     @relation(fields: [organizationId, ownerId], references: [organizationId, userId], onDelete: Restrict)
+  contact        Contact?       @relation(fields: [organizationId, contactId], references: [organizationId, id], onDelete: NoAction)
+  deal           Deal?          @relation(fields: [organizationId, dealId], references: [organizationId, id], onDelete: NoAction)
+  @@unique([organizationId, id])
+  @@index([organizationId, ownerId, status, dueDate])
+  @@index([organizationId, contactId, createdAt])
+  @@index([organizationId, dealId, createdAt])
+  @@index([reminderAt, remindedAt])
+}
+
+model PlanLimits {
+  tier                    PlanTier       @id
+  monthlySeatPriceUsd     Decimal        @db.Decimal(10, 2)
+  includedActions         Int
+  includedTokens          Int
+  overagePerThousandUsd   Decimal        @default(0) @db.Decimal(10, 4)
+  maxSeats                Int
+  subscriptions           Subscription[]
+}
+
+model Subscription {
+  id                     String       @id @default(cuid())
+  organizationId         String       @unique
+  tier                   PlanTier     @default(starter)
+  status                 String       @default("trialing")
+  stripeCustomerId       String?      @unique
+  stripeSubscriptionId   String?      @unique
+  stripeSeatItemId       String?
+  seats                  Int          @default(1)
+  currentPeriodStart     DateTime
+  currentPeriodEnd       DateTime
+  cancelAtPeriodEnd      Boolean      @default(false)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                   PlanLimits   @relation(fields: [tier], references: [tier])
+}
+
+model AIUsageLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  requestId      String       @unique
+  actionType     AIActionType
+  model          String
+  inputTokens    Int
+  outputTokens   Int
+  costUsd        Decimal      @db.Decimal(14, 8)
+  periodStart    DateTime
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           Membership   @relation(fields: [organizationId, userId], references: [organizationId, userId], onDelete: Restrict)
+  @@index([organizationId, periodStart, userId])
+}
+
+model UsageBucket {
+  organizationId String
+  periodStart    DateTime
+  periodEnd      DateTime
+  actions        Int          @default(0)
+  tokens         Int          @default(0)
+  reservedTokens Int          @default(0)
+  reservedActions Int         @default(0)
+  costUsd        Decimal      @default(0) @db.Decimal(14, 8)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@id([organizationId, periodStart])
+}
+
+model AIRequest {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  actionType     AIActionType
+  periodStart    DateTime
+  reservedTokens Int
+  status         String       @default("reserved")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           Membership   @relation(fields: [organizationId, userId], references: [organizationId, userId], onDelete: Restrict)
+  @@index([organizationId, status, createdAt])
+}
+
+model AIAction {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  kind           String
+  payload        Json
+  status         String       @default("pending")
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           Membership   @relation(fields: [organizationId, userId], references: [organizationId, userId], onDelete: Restrict)
+  @@index([organizationId, userId, status])
+}
+
+model Job {
+  id             String       @id @default(cuid())
+  organizationId String
+  kind           String
+  dedupeKey      String       @unique
+  payload        Json
+  status         String       @default("pending")
+  attempts       Int          @default(0)
+  runAfter       DateTime     @default(now())
+  lockedAt       DateTime?
+  error          String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([status, runAfter])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  actorId        String
+  action         String
+  entityId       String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, createdAt])
+}
+
+model StripeEvent {
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+}
